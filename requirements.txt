@@ -1,0 +1,7 @@
+streamlit
+pandas
+openpyxl
+nba_api
+pytz
+Pillow
+tqdm
