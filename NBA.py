@@ -62,7 +62,7 @@ def fetch_players(team_id):
     return df[["PLAYER_ID", "PLAYER"]]
 
 def fetch_game_stats(player_id, season: str):
-    """Get a player's game log (points + assists + opponent + game date)."""
+    """Get a player's game log (points, assists, rebounds, 3PM, opponent, game date)."""
     try:
         gamelog = playergamelog.PlayerGameLog(
             player_id=player_id,
@@ -74,26 +74,30 @@ def fetch_game_stats(player_id, season: str):
     except Exception as e:
         # If we hit a timeout or some other error for this player, just skip them
         print(f"     ⚠️  Skipping this player's games due to error: {e}")
-        return pd.DataFrame(columns=["Game Time (PST)", "Opponent", "Points", "Assists"])
+        return pd.DataFrame(columns=["Game Time (PST)", "Opponent", "Points", "Assists", "Rebounds", "3PM"])
 
-    expected_cols = [c for c in ["GAME_DATE", "MATCHUP", "PTS", "AST"] if c in df.columns]
-    if not expected_cols or "PTS" not in df.columns:
-        return pd.DataFrame(columns=["Game Time (PST)", "Opponent", "Points", "Assists"])
+    needed = {"GAME_DATE", "MATCHUP", "PTS", "AST", "REB", "FG3M"}
+    present = needed.intersection(df.columns)
+    # Require at least PTS to consider this valid; fill missing others with 0
+    if "PTS" not in present or "GAME_DATE" not in present or "MATCHUP" not in present:
+        return pd.DataFrame(columns=["Game Time (PST)", "Opponent", "Points", "Assists", "Rebounds", "3PM"])
 
-    df = df[expected_cols].rename(columns={"GAME_DATE": "Date"})
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    # Keep only the columns we can map; fill missing metric cols with 0
+    out = df[list(present)].rename(columns={"GAME_DATE": "Date"})
+    # Add missing stat columns with zeros if not present (defensive coding)
+    for col_src, col_dst in [("AST", "Assists"), ("REB", "Rebounds"), ("FG3M", "3PM"), ("PTS", "Points")]:
+        if col_src not in out.columns:
+            out[col_src] = 0
 
-    # NOTE: PlayerGameLog only gives dates, not real tip-off times.
-    # We format the date into a single "Game Time (PST)" column for consistency.
-    df["Game Time (PST)"] = df["Date"].dt.strftime("%Y-%m-%d")
+    out["Date"] = pd.to_datetime(out["Date"], errors="coerce")
+    out["Game Time (PST)"] = out["Date"].dt.strftime("%Y-%m-%d")
+    out["Opponent"] = out["MATCHUP"].apply(lambda x: x.split(" ")[-1] if isinstance(x, str) else "")
 
-    df["Opponent"] = df["MATCHUP"].apply(lambda x: x.split(" ")[-1] if isinstance(x, str) else "")
-    df = df.rename(columns={"PTS": "Points", "AST": "Assists"})
-
-    return df[["Game Time (PST)", "Opponent", "Points", "Assists"]].sort_values("Game Time (PST)")
+    out = out.rename(columns={"PTS": "Points", "AST": "Assists", "REB": "Rebounds", "FG3M": "3PM"})
+    return out[["Game Time (PST)", "Opponent", "Points", "Assists", "Rebounds", "3PM"]].sort_values("Game Time (PST)")
 
 def export_team_from_object(team_obj: dict, season: str):
-    """Export one team's points/assists stats to an Excel file."""
+    """Export one team's points/assists/rebounds/3PM stats to an Excel file."""
     team_id = team_obj["id"]
     team_name = team_obj["full_name"]
     print(f"\n✅ Team: {team_name} | Season: {season}")
@@ -107,8 +111,12 @@ def export_team_from_object(team_obj: dict, season: str):
 
     combined_points = None
     combined_assists = None
+    combined_rebounds = None
+    combined_3pm = None
     avg_points = []
     avg_assists = []
+    avg_rebounds = []
+    avg_3pm = []
 
     for _, row in players_df.iterrows():
         pid = row["PLAYER_ID"]
@@ -120,52 +128,65 @@ def export_team_from_object(team_obj: dict, season: str):
 
         # Points
         p_df = games[["Game Time (PST)", "Opponent", "Points"]].rename(columns={"Points": pname})
-        if combined_points is None:
-            combined_points = p_df
-        else:
-            combined_points = pd.merge(
-                combined_points,
-                p_df,
-                on=["Game Time (PST)", "Opponent"],
-                how="outer",
-            )
+        combined_points = p_df if combined_points is None else pd.merge(
+            combined_points, p_df, on=["Game Time (PST)", "Opponent"], how="outer"
+        )
 
         # Assists
         a_df = games[["Game Time (PST)", "Opponent", "Assists"]].rename(columns={"Assists": pname})
-        if combined_assists is None:
-            combined_assists = a_df
-        else:
-            combined_assists = pd.merge(
-                combined_assists,
-                a_df,
-                on=["Game Time (PST)", "Opponent"],
-                how="outer",
-            )
+        combined_assists = a_df if combined_assists is None else pd.merge(
+            combined_assists, a_df, on=["Game Time (PST)", "Opponent"], how="outer"
+        )
+
+        # Rebounds
+        r_df = games[["Game Time (PST)", "Opponent", "Rebounds"]].rename(columns={"Rebounds": pname})
+        combined_rebounds = r_df if combined_rebounds is None else pd.merge(
+            combined_rebounds, r_df, on=["Game Time (PST)", "Opponent"], how="outer"
+        )
+
+        # 3PM
+        t_df = games[["Game Time (PST)", "Opponent", "3PM"]].rename(columns={"3PM": pname})
+        combined_3pm = t_df if combined_3pm is None else pd.merge(
+            combined_3pm, t_df, on=["Game Time (PST)", "Opponent"], how="outer"
+        )
 
         avg_points.append({"Player": pname, "Avg Points": games["Points"].mean()})
         avg_assists.append({"Player": pname, "Avg Assists": games["Assists"].mean()})
+        avg_rebounds.append({"Player": pname, "Avg Rebounds": games["Rebounds"].mean()})
+        avg_3pm.append({"Player": pname, "Avg 3PM": games["3PM"].mean()})
 
     if combined_points is None or combined_points.empty:
         print(f"  ⚠️  No game data found for {team_name} in season {season}. Skipping file.")
         return
 
-    combined_points = combined_points.sort_values("Game Time (PST)").fillna(0)
-    combined_assists = combined_assists.sort_values("Game Time (PST)").fillna(0)
+    def _sort_fill(df):
+        return df.sort_values("Game Time (PST)").fillna(0)
+
+    combined_points = _sort_fill(combined_points)
+    combined_assists = _sort_fill(combined_assists)
+    combined_rebounds = _sort_fill(combined_rebounds)
+    combined_3pm = _sort_fill(combined_3pm)
 
     avg_points_df = pd.DataFrame(avg_points).sort_values("Avg Points", ascending=False)
     avg_assists_df = pd.DataFrame(avg_assists).sort_values("Avg Assists", ascending=False)
+    avg_rebounds_df = pd.DataFrame(avg_rebounds).sort_values("Avg Rebounds", ascending=False)
+    avg_3pm_df = pd.DataFrame(avg_3pm).sort_values("Avg 3PM", ascending=False)
 
     file_name = f"{team_name.replace(' ', '_')}_{season}_stats.xlsx"
     with pd.ExcelWriter(file_name, engine="openpyxl") as writer:
         combined_points.to_excel(writer, sheet_name="Points", index=False)
         combined_assists.to_excel(writer, sheet_name="Assists", index=False)
+        combined_rebounds.to_excel(writer, sheet_name="Rebounds", index=False)
+        combined_3pm.to_excel(writer, sheet_name="3PM", index=False)
         avg_points_df.to_excel(writer, sheet_name="Avg Points", index=False)
         avg_assists_df.to_excel(writer, sheet_name="Avg Assists", index=False)
+        avg_rebounds_df.to_excel(writer, sheet_name="Avg Rebounds", index=False)
+        avg_3pm_df.to_excel(writer, sheet_name="Avg 3PM", index=False)
 
     print(f"  💾 Saved '{file_name}'")
 
 def main():
-    print("🏀 NBA Tracker – Points, Assists, Opponents & Game Time")
+    print("🏀 NBA Tracker – Points, Assists, Rebounds, 3PM, Opponents & Game Time")
     mode = input("Download data for one team or all teams? (one/all): ").strip().lower()
     raw_season = input("Which season? (e.g., 2024-25 or 2025 or 25): ")
     season = parse_season_input(raw_season)
