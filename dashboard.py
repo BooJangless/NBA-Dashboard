@@ -5,78 +5,351 @@ import pandas as pd
 import streamlit as st
 from PIL import Image
 
-# Folder where your logos live
+# ================== BASIC SETUP ==================
+DATA_DIR = r"C:\Users\Dubz\Desktop\My sports bettor\NBA"  # Folder with all *_stats.xlsx
 LOGO_DIR = "Team_logos"
 
-st.set_page_config(page_title="NBA Team Dashboard", layout="wide")
+SPORT_KEYS = ["NBA", "NCAAM", "NFL", "NCAAF", "WNBA", "NCAAW"]
+SPORT_KEY_MAP = {
+    "nba": "NBA",
+    "ncaam": "NCAAM",
+    "nfl": "NFL",
+    "ncaaf": "NCAAF",
+    "wnba": "WNBA",
+    "ncaaw": "NCAAW",
+}
 
-st.title("🏀 NBA Team Dashboard")
-st.write(
-    "Lux sports data experience: Player Points, Assists, Rebounds, 3PM, "
-    "Team Totals, Quick Bet Trends & 100%ers"
+st.set_page_config(
+    page_title="Lux Sports Data Hub",
+    page_icon="🏟️",
+    layout="wide",
 )
 
-# Find exported stats files
-excel_files = glob.glob("*_stats.xlsx")
 
-if not excel_files:
-    st.error("No Excel files found. Run your NBA stats script (NBA.py) first.")
-else:
-    # Pretty label for dropdown, e.g. "Los Angeles Lakers (2024-25)"
-    def parse_team_and_season(filename: str):
-        base = filename.replace("_stats.xlsx", "")
-        parts = base.split("_")
-        if "-" in parts[-1]:
-            season = parts[-1]
-            team = " ".join(parts[:-1])
-        else:
-            season = "Unknown"
-            team = " ".join(parts)
-        return team, season
+# ================== TOP HERO ==================
+st.markdown(
+    """
+    <div style="
+        background: radial-gradient(circle at top left, #22d3ee 0, #0f172a 40%, #020617 100%);
+        padding: 1.25rem 1.5rem;
+        border-radius: 1.5rem;
+        margin-bottom: 1.5rem;
+        border: 1px solid rgba(148,163,184,0.4);
+    ">
+        <div style="display:flex; align-items:center; gap:0.75rem;">
+            <div style="
+                height: 3rem; width: 3rem; border-radius: 999px;
+                background: radial-gradient(circle at 30% 30%, #facc15 0, #f97316 40%, #b91c1c 100%);
+                display:flex; align-items:center; justify-content:center;
+                box-shadow: 0 0 0 2px rgba(15,23,42,0.9);
+                font-size: 1.4rem;
+            ">LS</div>
+            <div>
+                <div style="font-size: 1.8rem; font-weight: 800; color: #f9fafb;">
+                    Lux Sports Data Hub
+                </div>
+                <div style="font-size: 0.95rem; color:#9ca3af; margin-top:0.15rem;">
+                    Tap a sport ➜ pick a team ➜ see the story behind the numbers.
+                    Easy to use, powerful enough for a pro.
+                </div>
+            </div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-    def pretty_label(filename):
-        team, season = parse_team_and_season(filename)
-        return f"{team} ({season})"
+
+# ================== HELPERS ==================
+def parse_team_season_sport(filepath: str):
+    """
+    Supports:
+      - 'Los_Angeles_Lakers_2024-25_stats.xlsx'
+      - 'Abilene_Christian_2025-26_ncaam_stats.xlsx'
+      - 'Chattanooga_2025-26_ncaam_stats.xlsx', etc.
+    """
+    filename = os.path.basename(filepath)
+    base = filename
+    if base.lower().endswith("_stats.xlsx"):
+        base = base[:-len("_stats.xlsx")]
+    parts = base.split("_")
+
+    sport = "Unknown"
+    if parts:
+        last_lower = parts[-1].lower()
+        if last_lower in SPORT_KEY_MAP:
+            sport = SPORT_KEY_MAP[last_lower]
+            parts = parts[:-1]
+
+    season = "Unknown"
+    if parts and "-" in parts[-1]:
+        season = parts[-1]
+        team_parts = parts[:-1]
+    else:
+        team_parts = parts
+
+    team = " ".join(team_parts) if team_parts else "Unknown Team"
+    return team, season, sport
+
+
+def pretty_label(filepath: str) -> str:
+    team, season, _ = parse_team_season_sport(filepath)
+    return f"{team} ({season})"
+
+
+def get_sport_files(sport_key: str):
+    """
+    Uses ALL '*_stats.xlsx' files in DATA_DIR and routes them to sports.
+
+    - Files named with '_<sport>_stats.xlsx' (e.g. '_ncaam_stats') go to that sport tab.
+    - Files without a sport suffix are treated as NBA-only (for backwards compatibility).
+    """
+    pattern = os.path.join(DATA_DIR, "*_stats.xlsx")
+    all_files = glob.glob(pattern)
+
+    sport_files = []
+    for f in all_files:
+        _, _, sport = parse_team_season_sport(f)
+        if sport == sport_key:
+            sport_files.append(f)
+        elif sport == "Unknown" and sport_key == "NBA":
+            sport_files.append(f)
+
+    return sport_files
+
+
+def get_logo_path(team_name: str) -> str:
+    """Map 'Indiana Pacers' -> Team_logos/indiana_pacers.png"""
+    fname = team_name.replace(" ", "_").lower() + ".png"
+    return os.path.join(LOGO_DIR, fname)
+
+
+def load_logo_data_uri(team_name: str) -> str:
+    logo_file = get_logo_path(team_name)
+    if not os.path.exists(logo_file):
+        return ""
+    with open(logo_file, "rb") as f:
+        data = base64.b64encode(f.read()).decode("utf-8")
+    return f"data:image/png;base64,{data}"
+
+
+logo_cache = {}
+
+
+def get_logo_html_for_team(team_name: str, size: int = 20) -> str:
+    if team_name not in logo_cache:
+        logo_cache[team_name] = load_logo_data_uri(team_name)
+    uri = logo_cache[team_name]
+    if not uri:
+        return ""
+    return (
+        f'<img src="{uri}" '
+        f'style="height:{size}px; width:{size}px; object-fit:contain; '
+        f'vertical-align:middle; margin-right:6px; border-radius:50%;">'
+    )
+
+
+def compute_trends(df: pd.DataFrame, thresholds, stat_label: str) -> pd.DataFrame:
+    """
+    thresholds: list of ints (e.g. [10, 15, 20,...])
+    stat_label: "Points", "Assists", "Rebounds", "3PM"
+    """
+    if df.empty:
+        return pd.DataFrame(
+            columns=[
+                "Player",
+                "Prop",
+                "Threshold",
+                "Total Games Hit",
+                "Longest Streak",
+                "Total Games",
+                "Hit %",
+            ]
+        )
+
+    df_sorted = df.sort_values("Game Time (PST)")
+    players = [c for c in df.columns if c not in ["Game Time (PST)", "Opponent"]]
+    records = []
+
+    for player in players:
+        series = df_sorted[player].fillna(0).astype(float)
+        total_games = len(series)
+        if total_games == 0:
+            continue
+
+        for t in thresholds:
+            total_hits = int((series >= t).sum())
+            current_streak = 0
+            longest_streak = 0
+
+            for val in series:
+                if val >= t:
+                    current_streak += 1
+                    longest_streak = max(longest_streak, current_streak)
+                else:
+                    current_streak = 0
+
+            if longest_streak >= 3:  # only show meaningful trends
+                hit_pct = (total_hits / total_games) * 100
+                records.append(
+                    {
+                        "Player": player,
+                        "Prop": f"{t}+ {stat_label}",
+                        "Threshold": t,
+                        "Total Games Hit": total_hits,
+                        "Longest Streak": longest_streak,
+                        "Total Games": total_games,
+                        "Hit %": hit_pct,
+                    }
+                )
+
+    if not records:
+        return pd.DataFrame(
+            columns=[
+                "Player",
+                "Prop",
+                "Threshold",
+                "Total Games Hit",
+                "Longest Streak",
+                "Total Games",
+                "Hit %",
+            ]
+        )
+
+    return pd.DataFrame(records).sort_values(
+        ["Hit %", "Longest Streak", "Total Games Hit"], ascending=False
+    )
+
+
+def compute_perfects(
+    df: pd.DataFrame, thresholds, stat_label: str, team_name: str
+) -> pd.DataFrame:
+    """
+    Find props where player hit EVERY game they played for that team/season.
+    """
+    if df.empty:
+        return pd.DataFrame(
+            columns=["Player", "Team", "Prop", "Threshold", "Total Games", "Hit %"]
+        )
+
+    df_sorted = df.sort_values("Game Time (PST)")
+    players = [c for c in df.columns if c not in ["Game Time (PST)", "Opponent"]]
+    records = []
+
+    for player in players:
+        series = df_sorted[player].dropna().astype(float)
+        total_games = len(series)
+        if total_games == 0:
+            continue
+
+        for t in thresholds:
+            total_hits = int((series >= t).sum())
+            if total_hits == total_games and total_games > 0:
+                hit_pct = (total_hits / total_games) * 100
+                records.append(
+                    {
+                        "Player": player,
+                        "Team": team_name,
+                        "Prop": f"{t}+ {stat_label}",
+                        "Threshold": t,
+                        "Total Games": total_games,
+                        "Hit %": hit_pct,
+                    }
+                )
+
+    if not records:
+        return pd.DataFrame(
+            columns=["Player", "Team", "Prop", "Threshold", "Total Games", "Hit %"]
+        )
+
+    return pd.DataFrame(records).sort_values(
+        ["Total Games", "Threshold"], ascending=[False, True]
+    )
+
+
+def render_player_view(
+    df, stat_type, avg_df, highlight_bg, highlight_text, threshold, legend_text
+):
+    all_players = [c for c in df.columns if c not in ["Game Time (PST)", "Opponent"]]
+    selected_players = st.multiselect(
+        f"Pick players ({stat_type}):",
+        options=all_players,
+        default=all_players,
+    )
+
+    display_df = (
+        df[["Game Time (PST)", "Opponent"] + selected_players]
+        if selected_players
+        else df[["Game Time (PST)", "Opponent"]]
+    )
+
+    st.markdown(f"**Legend:**  {legend_text}")
+
+    def highlight_values(val):
+        if isinstance(val, (int, float)) and val >= threshold:
+            return (
+                f"background-color: {highlight_bg}; "
+                f"color: {highlight_text}; "
+                f"font-weight: 600;"
+            )
+        return ""
+
+    styled = display_df.style.applymap(highlight_values, subset=selected_players)
+    st.dataframe(styled, use_container_width=True)
+
+    st.subheader(f"📈 {stat_type} Over Time")
+    if selected_players:
+        chart_df = df.set_index("Game Time (PST)")[selected_players]
+        st.line_chart(chart_df)
+    else:
+        st.info("Pick at least one player above to see the chart.")
+
+    st.markdown(f"### ⚡ Quick Averages ({stat_type})")
+    if not avg_df.empty:
+        stat_col = avg_df.columns[-1]
+        st.dataframe(
+            avg_df.style.format({stat_col: "{:.2f}"}), use_container_width=True
+        )
+    else:
+        st.info("No average data available.")
+
+
+# ================== BASKETBALL ENGINE (NBA / NCAAM) ==================
+def render_basketball_sport(sport_key: str, sport_label: str, icon: str):
+    st.markdown(
+        f"""
+        <div style="margin-top:0.4rem; margin-bottom:0.8rem;">
+            <span style="font-size:1.5rem;">{icon}</span>
+            <span style="font-size:1.35rem; font-weight:700; color:#e5e7eb; margin-left:0.35rem;">
+                {sport_label} Team Dashboard
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    excel_files = get_sport_files(sport_key)
+
+    if not excel_files:
+        st.error(
+            f"No Excel files found for {sport_label} in:\n\n{DATA_DIR}\n\n"
+            f"Make sure your files end with '_stats.xlsx' "
+            f"(e.g. 'Abilene_Christian_2025-26_ncaam_stats.xlsx')."
+        )
+        return
 
     label_to_file = {pretty_label(f): f for f in excel_files}
     selected_label = st.selectbox(
-        "Choose a team & season:", sorted(label_to_file.keys())
+        "1️⃣ Choose a team & season:",
+        sorted(label_to_file.keys()),
+        key=f"team_select_{sport_key}",
     )
     selected_file = label_to_file[selected_label]
     st.success(f"Loaded: {selected_label}")
 
-    # Extract team name from selected label (for the per-team tabs)
     team_name_part = selected_label.split(" (")[0]
 
-    # ---- Logo helpers ----
-    def get_logo_path(team_name: str) -> str:
-        """Map 'Indiana Pacers' -> Team_logos/indiana_pacers.png"""
-        fname = team_name.replace(" ", "_").lower() + ".png"
-        return os.path.join(LOGO_DIR, fname)
-
-    def load_logo_data_uri(team_name: str) -> str:
-        logo_file = get_logo_path(team_name)
-        if not os.path.exists(logo_file):
-            return ""
-        with open(logo_file, "rb") as f:
-            data = base64.b64encode(f.read()).decode("utf-8")
-        return f"data:image/png;base64,{data}"
-
-    logo_cache = {}
-
-    def get_logo_html_for_team(team_name: str, size: int = 20) -> str:
-        if team_name not in logo_cache:
-            logo_cache[team_name] = load_logo_data_uri(team_name)
-        uri = logo_cache[team_name]
-        if not uri:
-            return ""
-        return (
-            f'<img src="{uri}" '
-            f'style="height:{size}px; width:{size}px; object-fit:contain; '
-            f'vertical-align:middle; margin-right:6px; border-radius:50%;">'
-        )
-
-    # Preload selected team logo for Quick Bets
+    # Logo
     selected_team_logo_uri = load_logo_data_uri(team_name_part)
     if selected_team_logo_uri:
         logo_cache[team_name_part] = selected_team_logo_uri
@@ -84,12 +357,11 @@ else:
     else:
         quickbets_logo_html = ""
 
-    # Show big header logo if present
     big_logo_path = get_logo_path(team_name_part)
     if os.path.exists(big_logo_path):
         st.image(Image.open(big_logo_path), width=120)
 
-    # ---- Load sheets for the selected team ----
+    # ---- Load sheets ----
     points_df = pd.read_excel(selected_file, sheet_name="Points")
     assists_df = pd.read_excel(selected_file, sheet_name="Assists")
 
@@ -103,7 +375,6 @@ else:
     except Exception:
         threes_df = pd.DataFrame(columns=["Game Time (PST)", "Opponent"])
 
-    # Team total scores sheet (Team Points)
     try:
         team_totals_df = pd.read_excel(selected_file, sheet_name="Team Points")
     except Exception:
@@ -130,129 +401,10 @@ else:
     except Exception:
         avg_3pm_df = pd.DataFrame(columns=["Player", "Avg 3PM"])
 
-    # ---- Helper: compute streak trends for Quick Bets ----
-    def compute_trends(df: pd.DataFrame, thresholds, stat_label: str) -> pd.DataFrame:
-        """
-        thresholds: list of ints (e.g. [10, 15, 20,...])
-        stat_label: "Points", "Assists", "Rebounds", "3PM"
-        """
-        if df.empty:
-            return pd.DataFrame(
-                columns=[
-                    "Player",
-                    "Prop",
-                    "Threshold",
-                    "Total Games Hit",
-                    "Longest Streak",
-                    "Total Games",
-                    "Hit %",
-                ]
-            )
+    st.markdown("---")
 
-        df_sorted = df.sort_values("Game Time (PST)")
-        players = [c for c in df.columns if c not in ["Game Time (PST)", "Opponent"]]
-        records = []
-
-        for player in players:
-            series = df_sorted[player].fillna(0).astype(float)
-            total_games = len(series)
-            if total_games == 0:
-                continue
-
-            for t in thresholds:
-                total_hits = int((series >= t).sum())
-                current_streak = 0
-                longest_streak = 0
-
-                for val in series:
-                    if val >= t:
-                        current_streak += 1
-                        longest_streak = max(longest_streak, current_streak)
-                    else:
-                        current_streak = 0
-
-                if longest_streak >= 3:  # only show meaningful trends
-                    hit_pct = (total_hits / total_games) * 100
-                    records.append(
-                        {
-                            "Player": player,
-                            "Prop": f"{t}+ {stat_label}",
-                            "Threshold": t,
-                            "Total Games Hit": total_hits,
-                            "Longest Streak": longest_streak,
-                            "Total Games": total_games,
-                            "Hit %": hit_pct,
-                        }
-                    )
-
-        if not records:
-            return pd.DataFrame(
-                columns=[
-                    "Player",
-                    "Prop",
-                    "Threshold",
-                    "Total Games Hit",
-                    "Longest Streak",
-                    "Total Games",
-                    "Hit %",
-                ]
-            )
-
-        return pd.DataFrame(records).sort_values(
-            ["Hit %", "Longest Streak", "Total Games Hit"], ascending=False
-        )
-
-    # ---- Helper: compute 100% hit rate props (no streak requirement) ----
-    def compute_perfects(
-        df: pd.DataFrame, thresholds, stat_label: str, team_name: str
-    ) -> pd.DataFrame:
-        """
-        Find props where player hit EVERY game they played for that team/season.
-        thresholds: list of ints
-        stat_label: "Points", "Assists", "Rebounds", "3PM"
-        """
-        if df.empty:
-            return pd.DataFrame(
-                columns=["Player", "Team", "Prop", "Threshold", "Total Games", "Hit %"]
-            )
-
-        df_sorted = df.sort_values("Game Time (PST)")
-        players = [c for c in df.columns if c not in ["Game Time (PST)", "Opponent"]]
-        records = []
-
-        for player in players:
-            series = df_sorted[player].dropna().astype(float)
-            total_games = len(series)
-            if total_games == 0:
-                continue
-
-            for t in thresholds:
-                total_hits = int((series >= t).sum())
-                if total_hits == total_games and total_games > 0:
-                    hit_pct = (total_hits / total_games) * 100  # should be 100
-                    records.append(
-                        {
-                            "Player": player,
-                            "Team": team_name,
-                            "Prop": f"{t}+ {stat_label}",
-                            "Threshold": t,
-                            "Total Games": total_games,
-                            "Hit %": hit_pct,
-                        }
-                    )
-
-        if not records:
-            return pd.DataFrame(
-                columns=["Player", "Team", "Prop", "Threshold", "Total Games", "Hit %"]
-            )
-
-        return pd.DataFrame(records).sort_values(
-            ["Total Games", "Threshold"], ascending=[False, True]
-        )
-
-    # ---- Main view choice (added Team Totals) ----
     view_choice = st.radio(
-        "Select View:",
+        "2️⃣ What do you want to see?",
         [
             "Player Points",
             "Player Assists",
@@ -262,54 +414,9 @@ else:
             "Quick Bets",
             "100%ers",
         ],
+        key=f"view_choice_{sport_key}",
+        horizontal=True,
     )
-
-    # ---- Common player-view code ----
-    def render_player_view(
-        df, stat_type, avg_df, highlight_bg, highlight_text, threshold, legend_text
-    ):
-        all_players = [c for c in df.columns if c not in ["Game Time (PST)", "Opponent"]]
-        selected_players = st.multiselect(
-            f"Select players to display ({stat_type}):",
-            options=all_players,
-            default=all_players,
-        )
-
-        display_df = (
-            df[["Game Time (PST)", "Opponent"] + selected_players]
-            if selected_players
-            else df[["Game Time (PST)", "Opponent"]]
-        )
-
-        st.markdown(f"**Legend:**  {legend_text}")
-
-        def highlight_values(val):
-            if isinstance(val, (int, float)) and val >= threshold:
-                return (
-                    f"background-color: {highlight_bg}; "
-                    f"color: {highlight_text}; "
-                    f"font-weight: 600;"
-                )
-            return ""
-
-        styled = display_df.style.applymap(highlight_values, subset=selected_players)
-        st.dataframe(styled, use_container_width=True)
-
-        st.subheader(f"📈 {stat_type} Over Time")
-        if selected_players:
-            chart_df = df.set_index("Game Time (PST)")[selected_players]
-            st.line_chart(chart_df)
-        else:
-            st.info("Pick at least one player above to see the chart.")
-
-        st.markdown(f"### ⚡ Quick Averages ({stat_type})")
-        if not avg_df.empty:
-            stat_col = avg_df.columns[-1]
-            st.dataframe(
-                avg_df.style.format({stat_col: "{:.2f}"}), use_container_width=True
-            )
-        else:
-            st.info("No average data available.")
 
     # ========== PLAYER VIEWS ==========
     if view_choice == "Player Points":
@@ -356,7 +463,7 @@ else:
             "🎯 Highlight = Player made 2+ 3-pointers",
         )
 
-    # ========== TEAM TOTALS VIEW ==========
+    # ========== TEAM TOTALS ==========
     elif view_choice == "Team Totals":
         st.subheader("📊 Team Scores & Game Totals")
 
@@ -365,12 +472,10 @@ else:
         else:
             df = team_totals_df.copy()
 
-            # Ensure numeric
             for col in ["Team Points", "Opponent Points", "Game Total Points"]:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
 
-            # Clean/sort dates
             if "Game Time (PST)" in df.columns:
                 df["Game Time (PST)"] = pd.to_datetime(
                     df["Game Time (PST)"], errors="coerce"
@@ -392,10 +497,12 @@ else:
 
             if df["Game Total Points"].notna().any():
                 max_row = df.loc[df["Game Total Points"].idxmax()]
+                date_str = max_row["Game Time (PST)"].strftime("%Y-%m-%d")
+                opp = max_row["Opponent"]
+                total_pts = int(max_row["Game Total Points"])
                 st.markdown(
-                    f"**Biggest firework game:** "
-                    f"{max_row['Game Time (PST)'].strftime('%Y-%m-%d')} vs {max_row['Opponent']} "
-                    f"with **{int(max_row['Game Total Points'])}** total points 🎆"
+                    f"**Biggest firework game:** {date_str} vs {opp} "
+                    f"with **{total_pts}** total points 🎆"
                 )
 
             st.markdown("---")
@@ -436,7 +543,7 @@ else:
             ]
             st.line_chart(df_chart)
 
-    # ========== QUICK BETS VIEW ==========
+    # ========== QUICK BETS ==========
     elif view_choice == "Quick Bets":
         st.subheader("⚡ Quick Bets – Trend Finder")
         st.write(
@@ -488,23 +595,36 @@ else:
 
         percentage_color = "#10B981"
 
-        def render_trend_grouped(trends_df, palette, stat_label, logo_html_prefix="", max_items=20):
+        def render_trend_grouped(
+            trends_df, palette, stat_label, logo_html_prefix="", max_items=20
+        ):
             if trends_df.empty:
                 st.info("No strong trends (3+ game streaks) found for this stat.")
                 return
 
-            top_n = st.slider(
-                f"How many hot {stat_label.lower()} props to show?",
-                min_value=5,
-                max_value=min(max_items, len(trends_df)),
-                value=min(10, len(trends_df)),
-                key=f"slider_{stat_label}",
-            )
+            n_rows = len(trends_df)
+            if n_rows <= 5:
+                top_n = n_rows
+            else:
+                max_val = min(max_items, n_rows)
+                min_val = 5
+                if max_val <= min_val:
+                    top_n = max_val
+                else:
+                    top_n = st.slider(
+                        f"How many hot {stat_label.lower()} props to show?",
+                        min_value=min_val,
+                        max_value=max_val,
+                        value=min(10, max_val),
+                        key=f"slider_{sport_key}_{stat_label}",
+                    )
 
             show_df = trends_df.head(top_n)
 
             for threshold, group in show_df.groupby("Threshold", sort=True):
-                pal_header = palette.get(int(threshold), {"bg": "#F9A826", "text": "#FACC15"})
+                pal_header = palette.get(
+                    int(threshold), {"bg": "#F9A826", "text": "#FACC15"}
+                )
                 header_color = pal_header["bg"]
 
                 header = f"{int(threshold)}+ {stat_label}"
@@ -559,21 +679,25 @@ else:
 
         with tab_assists:
             st.markdown("#### Hottest Assists Props")
-            render_trend_grouped(assists_trends, assists_palette, "Assists", quickbets_logo_html)
+            render_trend_grouped(
+                assists_trends, assists_palette, "Assists", quickbets_logo_html
+            )
 
         with tab_reb:
             st.markdown("#### Hottest Rebounds Props")
-            render_trend_grouped(rebounds_trends, rebounds_palette, "Rebounds", quickbets_logo_html)
+            render_trend_grouped(
+                rebounds_trends, rebounds_palette, "Rebounds", quickbets_logo_html
+            )
 
         with tab_3pm:
             st.markdown("#### Hottest 3PM Props")
             render_trend_grouped(threes_trends, threes_palette, "3PM", quickbets_logo_html)
 
-    # ========== 100%ers VIEW ==========
+    # ========== 100%ers ==========
     elif view_choice == "100%ers":
-        st.subheader("💯 100%ers – League-Wide Perfect Hit Rates")
+        st.subheader("💯 100%ers – Perfect Hit Rates")
         st.write(
-            "Players across **all teams & seasons** (based on your Excel files) who have a "
+            "Players on this team (and others in your files for this sport) who have a "
             "**100% hit rate** on any tracked prop."
         )
 
@@ -588,12 +712,11 @@ else:
         all_perfect_threes = []
 
         for f in excel_files:
-            team_name, season = parse_team_and_season(f)
+            team_name, _, _ = parse_team_season_sport(f)
             try:
                 p_df = pd.read_excel(f, sheet_name="Points")
                 a_df = pd.read_excel(f, sheet_name="Assists")
-            except Exception as e:
-                st.warning(f"Skipping file {f} due to error reading sheets: {e}")
+            except Exception:
                 continue
 
             try:
@@ -696,18 +819,29 @@ else:
                 )
                 return
 
-            top_n = st.slider(
-                f"How many perfect {stat_label.lower()} props to show?",
-                min_value=5,
-                max_value=min(max_items, len(df)),
-                value=min(15, len(df)),
-                key=f"slider_perfect_{stat_label}",
-            )
+            n_rows = len(df)
+            if n_rows <= 5:
+                top_n = n_rows
+            else:
+                max_val = min(max_items, n_rows)
+                min_val = 5
+                if max_val <= min_val:
+                    top_n = max_val
+                else:
+                    top_n = st.slider(
+                        f"How many perfect {stat_label.lower()} props to show?",
+                        min_value=min_val,
+                        max_value=max_val,
+                        value=min(15, max_val),
+                        key=f"slider_perfect_{sport_key}_{stat_label}",
+                    )
 
             show_df = df.head(top_n)
 
             for threshold, group in show_df.groupby("Threshold", sort=True):
-                pal_header = palette.get(int(threshold), {"bg": "#F9A826", "text": "#FACC15"})
+                pal_header = palette.get(
+                    int(threshold), {"bg": "#F9A826", "text": "#FACC15"}
+                )
                 header_color = pal_header["bg"]
 
                 header = f"{int(threshold)}+ {stat_label}"
@@ -771,3 +905,50 @@ else:
         with tab_t:
             st.markdown("#### Perfect 3PM Props")
             render_perfect_grouped(perfect_threes, threes_palette, "3PM")
+
+
+# ================== SPORT TABS (TOP LEVEL) ==================
+tab_nba, tab_ncaam, tab_nfl, tab_ncaaf, tab_wnba, tab_ncaaw = st.tabs(
+    ["🏀 NBA", "🎓 NCAAM", "🏈 NFL", "🎓 NCAAF", "🏀 WNBA", "🎓 NCAAW"]
+)
+
+with tab_nba:
+    render_basketball_sport("NBA", "NBA", "🏀")
+
+with tab_ncaam:
+    render_basketball_sport("NCAAM", "NCAA Men’s Basketball", "🎓")
+
+# Placeholders for sports not wired yet
+placeholder_card = """
+<div style="
+    margin-top:1rem;
+    padding:1.25rem 1.5rem;
+    border-radius:1rem;
+    border:1px dashed rgba(148,163,184,0.7);
+    background: rgba(15,23,42,0.7);
+">
+    <div style="font-size:1.2rem; font-weight:700; color:#e5e7eb; margin-bottom:0.35rem;">
+        Coming soon…
+    </div>
+    <div style="font-size:0.95rem; color:#9ca3af;">
+        This sport tab will light up once you plug in your {sport} Excel stat files. 🧠📊
+        Keep the same feel as your NBA / NCAAM exports and you’re good to go.
+    </div>
+</div>
+"""
+
+with tab_nfl:
+    st.markdown("### 🏈 NFL Dashboard", unsafe_allow_html=True)
+    st.markdown(placeholder_card.format(sport="NFL"), unsafe_allow_html=True)
+
+with tab_ncaaf:
+    st.markdown("### 🎓 NCAA Football (NCAAF) Dashboard", unsafe_allow_html=True)
+    st.markdown(placeholder_card.format(sport="NCAAF"), unsafe_allow_html=True)
+
+with tab_wnba:
+    st.markdown("### 🏀 WNBA Dashboard", unsafe_allow_html=True)
+    st.markdown(placeholder_card.format(sport="WNBA"), unsafe_allow_html=True)
+
+with tab_ncaaw:
+    st.markdown("### 🎓 NCAA Women’s Basketball (NCAAW) Dashboard", unsafe_allow_html=True)
+    st.markdown(placeholder_card.format(sport="NCAAW"), unsafe_allow_html=True)
