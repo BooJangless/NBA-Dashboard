@@ -3,7 +3,8 @@ pandas==2.2.3
 streamlit==1.39.0
 pillow==10.4.0
 openpyxl==3.1.2
-nba_api==1.4.1
+nba_api==1.11.3
 pytz==2024.1
 tqdm==4.66.4
 requests==2.32.3
+pyarrow==22.0.0
