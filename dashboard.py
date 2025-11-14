@@ -5,15 +5,20 @@ import pandas as pd
 import streamlit as st
 from PIL import Image
 
-# ================== BASIC SETUP ==================
+# ================== PAGE CONFIG (MUST BE FIRST) ==================
+st.set_page_config(
+    page_title="Lux Sports Data Hub",
+    page_icon="🏟️",
+    layout="wide",
+)
 
-# Base folder where the app is running (works on GitHub + locally)
+# ================== BASIC PATH SETUP ==================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Try these folders in order:
-#  1. ./data     (optional data folder in repo)
-#  2. repo root  (where dashboard.py lives)
-#  3. your old local Windows path (for running on your PC)
+# Order:
+#  1. ./data (if you ever move .xlsx files there)
+#  2. repo root (Streamlit Cloud case)
+#  3. your local Windows folder for running on your PC
 POSSIBLE_DATA_DIRS = [
     os.path.join(BASE_DIR, "data"),
     BASE_DIR,
@@ -26,7 +31,6 @@ for d in POSSIBLE_DATA_DIRS:
         DATA_DIR = d
         break
 
-# Fallback just in case
 if DATA_DIR is None:
     DATA_DIR = BASE_DIR
 
@@ -42,32 +46,8 @@ SPORT_KEY_MAP = {
     "ncaaw": "NCAAW",
 }
 
-st.set_page_config(
-    page_title="Lux Sports Data Hub",
-    page_icon="🏟️",
-    layout="wide",
-)
-
-# Just so you can see what folder it's actually using
+# Just to verify which folder is used
 st.caption(f"📂 Using data folder: `{DATA_DIR}`")
-LOGO_DIR = "Team_logos"
-
-SPORT_KEYS = ["NBA", "NCAAM", "NFL", "NCAAF", "WNBA", "NCAAW"]
-SPORT_KEY_MAP = {
-    "nba": "NBA",
-    "ncaam": "NCAAM",
-    "nfl": "NFL",
-    "ncaaf": "NCAAF",
-    "wnba": "WNBA",
-    "ncaaw": "NCAAW",
-}
-
-st.set_page_config(
-    page_title="Lux Sports Data Hub",
-    page_icon="🏟️",
-    layout="wide",
-)
-
 
 # ================== TOP HERO ==================
 st.markdown(
@@ -93,7 +73,7 @@ st.markdown(
                 </div>
                 <div style="font-size: 0.95rem; color:#9ca3af; margin-top:0.15rem;">
                     Tap a sport ➜ pick a team ➜ see the story behind the numbers.
-                    Easy to use, powerful enough for a pro.
+                    Easy enough for a kid, powerful enough for a pro.
                 </div>
             </div>
         </div>
@@ -101,7 +81,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
 
 # ================== HELPERS ==================
 def parse_team_season_sport(filepath: str):
@@ -162,9 +141,9 @@ def get_sport_files(sport_key: str):
 
 
 def get_logo_path(team_name: str) -> str:
-    """Map 'Indiana Pacers' -> Team_logos/indiana_pacers.png"""
+    """Map 'Indiana Pacers' -> BASE_DIR/Team_logos/indiana_pacers.png"""
     fname = team_name.replace(" ", "_").lower() + ".png"
-    return os.path.join(LOGO_DIR, fname)
+    return os.path.join(BASE_DIR, LOGO_DIR, fname)
 
 
 def load_logo_data_uri(team_name: str) -> str:
