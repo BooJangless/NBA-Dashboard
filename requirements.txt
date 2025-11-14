@@ -1,4 +1,6 @@
-# Pin numpy first so pandas uses a wheel, not a source build
+# Choose wheels, not source builds
+# These pins work well on Streamlit Cloud + Python 3.11
+
 numpy==1.26.4
 pandas==2.2.3
 streamlit==1.39.0
