@@ -6,7 +6,50 @@ import streamlit as st
 from PIL import Image
 
 # ================== BASIC SETUP ==================
-DATA_DIR = r"C:\Users\Dubz\Desktop\My sports bettor\NBA"  # Folder with all *_stats.xlsx
+
+# Base folder where the app is running (works on GitHub + locally)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Try these folders in order:
+#  1. ./data     (optional data folder in repo)
+#  2. repo root  (where dashboard.py lives)
+#  3. your old local Windows path (for running on your PC)
+POSSIBLE_DATA_DIRS = [
+    os.path.join(BASE_DIR, "data"),
+    BASE_DIR,
+    r"C:\Users\Dubz\Desktop\My sports bettor\NBA",
+]
+
+DATA_DIR = None
+for d in POSSIBLE_DATA_DIRS:
+    if os.path.isdir(d):
+        DATA_DIR = d
+        break
+
+# Fallback just in case
+if DATA_DIR is None:
+    DATA_DIR = BASE_DIR
+
+LOGO_DIR = "Team_logos"
+
+SPORT_KEYS = ["NBA", "NCAAM", "NFL", "NCAAF", "WNBA", "NCAAW"]
+SPORT_KEY_MAP = {
+    "nba": "NBA",
+    "ncaam": "NCAAM",
+    "nfl": "NFL",
+    "ncaaf": "NCAAF",
+    "wnba": "WNBA",
+    "ncaaw": "NCAAW",
+}
+
+st.set_page_config(
+    page_title="Lux Sports Data Hub",
+    page_icon="🏟️",
+    layout="wide",
+)
+
+# Just so you can see what folder it's actually using
+st.caption(f"📂 Using data folder: `{DATA_DIR}`")
 LOGO_DIR = "Team_logos"
 
 SPORT_KEYS = ["NBA", "NCAAM", "NFL", "NCAAF", "WNBA", "NCAAW"]
