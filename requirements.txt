@@ -1,7 +1,10 @@
+# Pin numpy first so pandas uses a wheel, not a source build
+numpy==1.26.4
+pandas==2.2.3
 streamlit==1.39.0
-pandas==2.2.2
 openpyxl==3.1.2
 nba_api==1.4.1
 pytz==2024.1
 Pillow==10.3.0
 tqdm==4.66.4
+requests==2.32.3
