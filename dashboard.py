@@ -73,7 +73,7 @@ st.markdown(
                 </div>
                 <div style="font-size: 0.95rem; color:#9ca3af; margin-top:0.15rem;">
                     Tap a sport ➜ pick a team ➜ see the story behind the numbers.
-                    Easy enough for a kid, powerful enough for a pro.
+                    Easy enough for your grandpa, powerful enough for a pro.
                 </div>
             </div>
         </div>
