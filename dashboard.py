@@ -1,8 +1,12 @@
 import os
 import glob
+import base64
 import pandas as pd
 import streamlit as st
 from PIL import Image
+
+# Folder where your logos live
+LOGO_DIR = "Team_logos"
 
 st.set_page_config(page_title="NBA Team Dashboard", layout="wide")
 
@@ -44,16 +48,51 @@ else:
     # Extract team name from selected label (for the per-team tabs)
     team_name_part = selected_label.split(" (")[0]
 
-    # Try to show team logo for selected team
-    logo_path = f"logos/{team_name_part.replace(' ', '_')}.png"
-    if os.path.exists(logo_path):
-        st.image(Image.open(logo_path), width=120)
+    # ---- Logo helpers ----
+    def get_logo_path(team_name: str) -> str:
+        """Map 'Indiana Pacers' -> Team_logos/indiana_pacers.png"""
+        fname = team_name.replace(" ", "_").lower() + ".png"
+        return os.path.join(LOGO_DIR, fname)
 
-    # Load sheets for the selected team (for Points / Assists / Rebounds / 3PM)
+    def load_logo_data_uri(team_name: str) -> str:
+        logo_file = get_logo_path(team_name)
+        if not os.path.exists(logo_file):
+            return ""
+        with open(logo_file, "rb") as f:
+            data = base64.b64encode(f.read()).decode("utf-8")
+        return f"data:image/png;base64,{data}"
+
+    logo_cache = {}
+
+    def get_logo_html_for_team(team_name: str, size: int = 20) -> str:
+        if team_name not in logo_cache:
+            logo_cache[team_name] = load_logo_data_uri(team_name)
+        uri = logo_cache[team_name]
+        if not uri:
+            return ""
+        return (
+            f'<img src="{uri}" '
+            f'style="height:{size}px; width:{size}px; object-fit:contain; '
+            f'vertical-align:middle; margin-right:6px; border-radius:50%;">'
+        )
+
+    # Preload selected team logo for Quick Bets
+    selected_team_logo_uri = load_logo_data_uri(team_name_part)
+    if selected_team_logo_uri:
+        logo_cache[team_name_part] = selected_team_logo_uri
+        quickbets_logo_html = get_logo_html_for_team(team_name_part, size=22)
+    else:
+        quickbets_logo_html = ""
+
+    # Show big header logo if present
+    big_logo_path = get_logo_path(team_name_part)
+    if os.path.exists(big_logo_path):
+        st.image(Image.open(big_logo_path), width=120)
+
+    # ---- Load sheets for the selected team ----
     points_df = pd.read_excel(selected_file, sheet_name="Points")
     assists_df = pd.read_excel(selected_file, sheet_name="Assists")
 
-    # New sheets (defensive load in case old files don't have them yet)
     try:
         rebounds_df = pd.read_excel(selected_file, sheet_name="Rebounds")
     except Exception:
@@ -64,7 +103,7 @@ else:
     except Exception:
         threes_df = pd.DataFrame(columns=["Game Time (PST)", "Opponent"])
 
-    # NEW: team total scores sheet (Team Points)
+    # Team total scores sheet (Team Points)
     try:
         team_totals_df = pd.read_excel(selected_file, sheet_name="Team Points")
     except Exception:
@@ -81,7 +120,6 @@ else:
     avg_points_df = pd.read_excel(selected_file, sheet_name="Avg Points")
     avg_assists_df = pd.read_excel(selected_file, sheet_name="Avg Assists")
 
-    # New avg sheets
     try:
         avg_rebounds_df = pd.read_excel(selected_file, sheet_name="Avg Rebounds")
     except Exception:
@@ -212,7 +250,7 @@ else:
             ["Total Games", "Threshold"], ascending=[False, True]
         )
 
-    # Main view choice (added Team Totals)
+    # ---- Main view choice (added Team Totals) ----
     view_choice = st.radio(
         "Select View:",
         [
@@ -226,11 +264,10 @@ else:
         ],
     )
 
-    # Common player-view code (to keep structure same)
+    # ---- Common player-view code ----
     def render_player_view(
         df, stat_type, avg_df, highlight_bg, highlight_text, threshold, legend_text
     ):
-        # All players selected by default
         all_players = [c for c in df.columns if c not in ["Game Time (PST)", "Opponent"]]
         selected_players = st.multiselect(
             f"Select players to display ({stat_type}):",
@@ -265,7 +302,6 @@ else:
         else:
             st.info("Pick at least one player above to see the chart.")
 
-        # Quick averages
         st.markdown(f"### ⚡ Quick Averages ({stat_type})")
         if not avg_df.empty:
             stat_col = avg_df.columns[-1]
@@ -299,7 +335,6 @@ else:
         )
 
     elif view_choice == "Player Rebounds":
-        # Lux green-ish palette
         render_player_view(
             rebounds_df,
             "Rebounds",
@@ -311,7 +346,6 @@ else:
         )
 
     elif view_choice == "Player 3PM":
-        # Lux blue-grey palette
         render_player_view(
             threes_df,
             "3PM",
@@ -349,7 +383,6 @@ else:
                 "%Y-%m-%d"
             )
 
-            # --- Simple, kid-friendly summary cards ---
             col1, col2, col3 = st.columns(3)
             col1.metric("🟦 Our points (avg)", f"{df['Team Points'].mean():.1f}")
             col2.metric("🟥 Their points (avg)", f"{df['Opponent Points'].mean():.1f}")
@@ -357,7 +390,6 @@ else:
                 "🌟 Total points (avg)", f"{df['Game Total Points'].mean():.1f}"
             )
 
-            # Highest-scoring game
             if df["Game Total Points"].notna().any():
                 max_row = df.loc[df["Game Total Points"].idxmax()]
                 st.markdown(
@@ -368,7 +400,6 @@ else:
 
             st.markdown("---")
 
-            # --- Nice, color-coded table ---
             st.markdown("### 📅 Every Game – Nice & Simple")
 
             display_df = df_display.rename(
@@ -382,7 +413,6 @@ else:
             )
 
             def color_result(row):
-                # Green if we win, red if we lose, gray if tie
                 if row["Our Points"] > row["Their Points"]:
                     style = "background-color: #DCFCE7; color: #14532D; font-weight: 600;"
                 elif row["Our Points"] < row["Their Points"]:
@@ -400,14 +430,13 @@ else:
 
             st.markdown("---")
 
-            # --- Modern, simple chart ---
             st.markdown("### 📈 Points Story Over the Season")
             df_chart = df_chart.set_index("Game Time (PST)")[
                 ["Team Points", "Opponent Points", "Game Total Points"]
             ]
             st.line_chart(df_chart)
 
-    # ========== QUICK BETS VIEW (per selected team) ==========
+    # ========== QUICK BETS VIEW ==========
     elif view_choice == "Quick Bets":
         st.subheader("⚡ Quick Bets – Trend Finder")
         st.write(
@@ -415,22 +444,19 @@ else:
             "Only props with at least a **3-game hit streak** are shown."
         )
 
-        # Define thresholds
         points_thresholds = [10, 15, 20, 25, 30, 35]
         assists_thresholds = [3, 5, 7, 10]
         rebounds_thresholds = [5, 8, 10, 12, 15]
         threes_thresholds = [1, 2, 3, 4, 5]
 
-        # Compute trends for selected team
         points_trends = compute_trends(points_df, points_thresholds, "Points")
         assists_trends = compute_trends(assists_df, assists_thresholds, "Assists")
         rebounds_trends = compute_trends(rebounds_df, rebounds_thresholds, "Rebounds")
         threes_trends = compute_trends(threes_df, threes_thresholds, "3PM")
 
-        # Rich, high-contrast color palettes for thresholds
         points_palette = {
-            10: {"bg": "#F7C948", "text": "#1F1300"},
-            15: {"bg": "#F4A300", "text": "#1F1300"},
+            10: {"bg": "#F7C948", "text": "#111827"},
+            15: {"bg": "#F4A300", "text": "#111827"},
             20: {"bg": "#E66F00", "text": "#FFFFFF"},
             25: {"bg": "#C83C00", "text": "#FFFFFF"},
             30: {"bg": "#B91C1C", "text": "#FFFFFF"},
@@ -445,7 +471,7 @@ else:
         }
 
         rebounds_palette = {
-            5: {"bg": "#34D399", "text": "#044E35"},
+            5: {"bg": "#34D399", "text": "#064E3B"},
             8: {"bg": "#10B981", "text": "#FFFFFF"},
             10: {"bg": "#059669", "text": "#FFFFFF"},
             12: {"bg": "#047857", "text": "#FFFFFF"},
@@ -453,81 +479,97 @@ else:
         }
 
         threes_palette = {
-            1: {"bg": "#BFDBFE", "text": "#0F172A"},
-            2: {"bg": "#93C5FD", "text": "#0F172A"},
+            1: {"bg": "#BFDBFE", "text": "#111827"},
+            2: {"bg": "#93C5FD", "text": "#111827"},
             3: {"bg": "#60A5FA", "text": "#FFFFFF"},
             4: {"bg": "#3B82F6", "text": "#FFFFFF"},
             5: {"bg": "#1D4ED8", "text": "#FFFFFF"},
         }
 
-        percentage_color = "#065F46"
+        percentage_color = "#10B981"
 
-        def render_trend_list(trends_df, palette, max_items=10):
+        def render_trend_grouped(trends_df, palette, stat_label, logo_html_prefix="", max_items=20):
             if trends_df.empty:
                 st.info("No strong trends (3+ game streaks) found for this stat.")
                 return
 
             top_n = st.slider(
-                "How many hot props to show?",
-                min_value=3,
-                max_value=min(25, len(trends_df)),
-                value=min(max_items, len(trends_df)),
-                key=f"slider_{id(trends_df)}",
+                f"How many hot {stat_label.lower()} props to show?",
+                min_value=5,
+                max_value=min(max_items, len(trends_df)),
+                value=min(10, len(trends_df)),
+                key=f"slider_{stat_label}",
             )
 
             show_df = trends_df.head(top_n)
 
-            for _, row in show_df.iterrows():
-                t = int(row["Threshold"])
-                pal = palette.get(t, {"bg": "#F7C948", "text": "#1F1300"})
-                pct = float(row["Hit %"])
-                total_games = int(row["Total Games"])
-                total_hits = int(row["Total Games Hit"])
-                longest_streak = int(row["Longest Streak"])
+            for threshold, group in show_df.groupby("Threshold", sort=True):
+                pal_header = palette.get(int(threshold), {"bg": "#F9A826", "text": "#FACC15"})
+                header_color = pal_header["bg"]
 
-                chip = (
-                    f'<span style="background-color:{pal["bg"]}; color:{pal["text"]}; '
-                    f'padding:3px 8px; border-radius:999px; font-weight:600; font-size:0.9rem;">'
-                    f'{row["Player"]} {row["Prop"]}'
-                    f"</span>"
-                )
-                pct_text = (
-                    f'<span style="color:{percentage_color}; font-weight:700; margin-left:6px; font-size:0.85rem;">'
-                    f"{pct:.1f}% hit rate"
-                    f"</span>"
-                )
-                meta_text = (
-                    f"<span style='color:#4B5563; font-size:0.8rem;'>"
-                    f" ({total_hits}/{total_games} games, best streak {longest_streak})"
-                    f"</span>"
-                )
-
+                header = f"{int(threshold)}+ {stat_label}"
                 st.markdown(
-                    chip + " " + pct_text + " " + meta_text, unsafe_allow_html=True
+                    f"<div style='margin-top:0.85rem; margin-bottom:0.25rem; "
+                    f"font-weight:700; font-size:1.05rem; letter-spacing:0.04em; "
+                    f"text-transform:uppercase; color:{header_color};'>"
+                    f"{header}"
+                    f"</div>",
+                    unsafe_allow_html=True,
                 )
 
-        # Tabs for super quick scanning
+                for _, row in group.iterrows():
+                    t = int(row["Threshold"])
+                    pal = palette.get(t, {"bg": "#F7C948", "text": "#111827"})
+                    pct = float(row["Hit %"])
+                    total_games = int(row["Total Games"])
+                    total_hits = int(row["Total Games Hit"])
+                    longest_streak = int(row["Longest Streak"])
+
+                    chip = (
+                        f'{logo_html_prefix}'
+                        f'<span style="background-color:{pal["bg"]}; color:{pal["text"]}; '
+                        f'padding:4px 10px; border-radius:999px; font-weight:600; font-size:1.0rem;">'
+                        f'{row["Player"]} {row["Prop"]}'
+                        f"</span>"
+                    )
+                    pct_text = (
+                        f'<span style="color:{percentage_color}; font-weight:700; '
+                        f'margin-left:6px; font-size:0.9rem;">'
+                        f"{pct:.1f}% hit rate"
+                        f"</span>"
+                    )
+                    meta_text = (
+                        f"<span style='color:#D1D5DB; font-size:0.85rem;'>"
+                        f" ({total_hits}/{total_games} games, best streak {longest_streak})"
+                        f"</span>"
+                    )
+
+                    st.markdown(
+                        chip + " " + pct_text + " " + meta_text,
+                        unsafe_allow_html=True,
+                    )
+
         tab_points, tab_assists, tab_reb, tab_3pm = st.tabs(
             ["🥇 Points", "👑 Assists", "🟢 Rebounds", "🎯 3PM"]
         )
 
         with tab_points:
             st.markdown("#### Hottest Points Props")
-            render_trend_list(points_trends, points_palette)
+            render_trend_grouped(points_trends, points_palette, "Points", quickbets_logo_html)
 
         with tab_assists:
             st.markdown("#### Hottest Assists Props")
-            render_trend_list(assists_trends, assists_palette)
+            render_trend_grouped(assists_trends, assists_palette, "Assists", quickbets_logo_html)
 
         with tab_reb:
             st.markdown("#### Hottest Rebounds Props")
-            render_trend_list(rebounds_trends, rebounds_palette)
+            render_trend_grouped(rebounds_trends, rebounds_palette, "Rebounds", quickbets_logo_html)
 
         with tab_3pm:
             st.markdown("#### Hottest 3PM Props")
-            render_trend_list(threes_trends, threes_palette)
+            render_trend_grouped(threes_trends, threes_palette, "3PM", quickbets_logo_html)
 
-    # ========== 100%ers VIEW (ACROSS ALL TEAMS) ==========
+    # ========== 100%ers VIEW ==========
     elif view_choice == "100%ers":
         st.subheader("💯 100%ers – League-Wide Perfect Hit Rates")
         st.write(
@@ -535,13 +577,11 @@ else:
             "**100% hit rate** on any tracked prop."
         )
 
-        # Define thresholds
         points_thresholds = [10, 15, 20, 25, 30, 35]
         assists_thresholds = [3, 5, 7, 10]
         rebounds_thresholds = [5, 8, 10, 12, 15]
         threes_thresholds = [1, 2, 3, 4, 5]
 
-        # Aggregate perfect props from ALL teams/files
         all_perfect_points = []
         all_perfect_assists = []
         all_perfect_rebounds = []
@@ -556,7 +596,6 @@ else:
                 st.warning(f"Skipping file {f} due to error reading sheets: {e}")
                 continue
 
-            # New sheets defensive read
             try:
                 r_df = pd.read_excel(f, sheet_name="Rebounds")
             except Exception:
@@ -603,7 +642,6 @@ else:
             ["Player", "Team", "Prop", "Threshold", "Total Games", "Hit %"],
         )
 
-        # Sort for neat presentation
         def sort_df(df):
             if not df.empty:
                 return df.sort_values(
@@ -617,10 +655,9 @@ else:
         perfect_rebounds = sort_df(perfect_rebounds)
         perfect_threes = sort_df(perfect_threes)
 
-        # Palettes
         points_palette = {
-            10: {"bg": "#F7C948", "text": "#1F1300"},
-            15: {"bg": "#F4A300", "text": "#1F1300"},
+            10: {"bg": "#F7C948", "text": "#111827"},
+            15: {"bg": "#F4A300", "text": "#111827"},
             20: {"bg": "#E66F00", "text": "#FFFFFF"},
             25: {"bg": "#C83C00", "text": "#FFFFFF"},
             30: {"bg": "#B91C1C", "text": "#FFFFFF"},
@@ -635,7 +672,7 @@ else:
         }
 
         rebounds_palette = {
-            5: {"bg": "#34D399", "text": "#044E35"},
+            5: {"bg": "#34D399", "text": "#064E3B"},
             8: {"bg": "#10B981", "text": "#FFFFFF"},
             10: {"bg": "#059669", "text": "#FFFFFF"},
             12: {"bg": "#047857", "text": "#FFFFFF"},
@@ -643,16 +680,16 @@ else:
         }
 
         threes_palette = {
-            1: {"bg": "#BFDBFE", "text": "#0F172A"},
-            2: {"bg": "#93C5FD", "text": "#0F172A"},
+            1: {"bg": "#BFDBFE", "text": "#111827"},
+            2: {"bg": "#93C5FD", "text": "#111827"},
             3: {"bg": "#60A5FA", "text": "#FFFFFF"},
             4: {"bg": "#3B82F6", "text": "#FFFFFF"},
             5: {"bg": "#1D4ED8", "text": "#FFFFFF"},
         }
 
-        percentage_color = "#065F46"
+        percentage_color = "#10B981"
 
-        def render_perfect_list(df, palette, max_items=15):
+        def render_perfect_grouped(df, palette, stat_label, max_items=40):
             if df.empty:
                 st.info(
                     "No players with a 100% hit rate on tracked props in your current data."
@@ -660,41 +697,60 @@ else:
                 return
 
             top_n = st.slider(
-                "How many perfect props to show?",
-                min_value=3,
-                max_value=min(40, len(df)),
-                value=min(max_items, len(df)),
-                key=f"slider_perfect_{id(df)}",
+                f"How many perfect {stat_label.lower()} props to show?",
+                min_value=5,
+                max_value=min(max_items, len(df)),
+                value=min(15, len(df)),
+                key=f"slider_perfect_{stat_label}",
             )
 
             show_df = df.head(top_n)
 
-            for _, row in show_df.iterrows():
-                t = int(row["Threshold"])
-                pal = palette.get(t, {"bg": "#F7C948", "text": "#1F1300"})
-                total_games = int(row["Total Games"])
-                pct = float(row["Hit %"])  # should be 100
+            for threshold, group in show_df.groupby("Threshold", sort=True):
+                pal_header = palette.get(int(threshold), {"bg": "#F9A826", "text": "#FACC15"})
+                header_color = pal_header["bg"]
 
-                chip = (
-                    f'<span style="background-color:{pal["bg"]}; color:{pal["text"]}; '
-                    f'padding:3px 8px; border-radius:999px; font-weight:600; font-size:0.9rem;">'
-                    f'({row["Team"]}) {row["Player"]} {row["Prop"]}'
-                    f"</span>"
-                )
-                pct_text = (
-                    f'<span style="color:{percentage_color}; font-weight:800; margin-left:6px; font-size:0.85rem;">'
-                    f"{pct:.0f}% hit rate"
-                    f"</span>"
-                )
-                meta_text = (
-                    f"<span style='color:#4B5563; font-size:0.8rem;'>"
-                    f" ({total_games}/{total_games} games)"
-                    f"</span>"
-                )
-
+                header = f"{int(threshold)}+ {stat_label}"
                 st.markdown(
-                    chip + " " + pct_text + " " + meta_text, unsafe_allow_html=True
+                    f"<div style='margin-top:0.85rem; margin-bottom:0.25rem; "
+                    f"font-weight:700; font-size:1.05rem; letter-spacing:0.04em; "
+                    f"text-transform:uppercase; color:{header_color};'>"
+                    f"{header}"
+                    f"</div>",
+                    unsafe_allow_html=True,
                 )
+
+                for _, row in group.iterrows():
+                    t = int(row["Threshold"])
+                    pal = palette.get(t, {"bg": "#F7C948", "text": "#111827"})
+                    total_games = int(row["Total Games"])
+                    pct = float(row["Hit %"])
+                    team = row["Team"]
+                    logo_html = get_logo_html_for_team(team, size=22)
+
+                    chip = (
+                        f'{logo_html}'
+                        f'<span style="background-color:{pal["bg"]}; color:{pal["text"]}; '
+                        f'padding:4px 10px; border-radius:999px; font-weight:600; font-size:1.0rem;">'
+                        f'({team}) {row["Player"]} {row["Prop"]}'
+                        f"</span>"
+                    )
+                    pct_text = (
+                        f'<span style="color:{percentage_color}; font-weight:800; '
+                        f'margin-left:6px; font-size:0.9rem;">'
+                        f"{pct:.0f}% hit rate"
+                        f"</span>"
+                    )
+                    meta_text = (
+                        f"<span style='color:#D1D5DB; font-size:0.85rem;'>"
+                        f" ({total_games}/{total_games} games)"
+                        f"</span>"
+                    )
+
+                    st.markdown(
+                        chip + " " + pct_text + " " + meta_text,
+                        unsafe_allow_html=True,
+                    )
 
         tab_p, tab_a, tab_r, tab_t = st.tabs(
             ["🥇 Points 100%ers", "👑 Assists 100%ers", "🟢 Rebounds 100%ers", "🎯 3PM 100%ers"]
@@ -702,16 +758,16 @@ else:
 
         with tab_p:
             st.markdown("#### Perfect Points Props")
-            render_perfect_list(perfect_points, points_palette)
+            render_perfect_grouped(perfect_points, points_palette, "Points")
 
         with tab_a:
             st.markdown("#### Perfect Assists Props")
-            render_perfect_list(perfect_assists, assists_palette)
+            render_perfect_grouped(perfect_assists, assists_palette, "Assists")
 
         with tab_r:
             st.markdown("#### Perfect Rebounds Props")
-            render_perfect_list(perfect_rebounds, rebounds_palette)
+            render_perfect_grouped(perfect_rebounds, rebounds_palette, "Rebounds")
 
         with tab_t:
             st.markdown("#### Perfect 3PM Props")
-            render_perfect_list(perfect_threes, threes_palette)
+            render_perfect_grouped(perfect_threes, threes_palette, "3PM")
