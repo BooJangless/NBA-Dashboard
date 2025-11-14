@@ -1,13 +1,15 @@
 import pandas as pd
 from nba_api.stats.static import teams
-from nba_api.stats.endpoints import commonteamroster, playergamelog
+from nba_api.stats.endpoints import commonteamroster, playergamelog, leaguegamelog
 import time
 import re
 from datetime import datetime
 import pytz  # still imported in case you want to adjust later
 
+
 def normalize_name(name: str):
     return name.lower().replace(" ", "").replace(".", "")
+
 
 def find_team(user_input: str):
     """Find an NBA team by flexible user input (city, nickname, abbrev, etc.)."""
@@ -27,32 +29,42 @@ def find_team(user_input: str):
             return t["id"], t["full_name"]
     return None, None
 
+
 def parse_season_input(user_input: str) -> str:
     """Let user type 25 / 2025 / 2024-25 and normalize to 'YYYY-YY'."""
     user_input = user_input.strip().lower()
     current_year = datetime.now().year
 
+    # Default: current season based on month
     if not user_input:
         year_start = current_year if datetime.now().month >= 8 else current_year - 1
         year_end = str(year_start + 1)[2:]
         return f"{year_start}-{year_end}"
 
+    # Strip words like "season" and whitespace
     user_input = re.sub(r"(season|the|\s)", "", user_input)
     match = re.match(r"(\d{2,4})(?:-|to)?(\d{2,4})?", user_input)
     if match:
         start = match.group(1)
         end = match.group(2)
+
+        # Normalize start
         start = int(start[-2:]) if len(start) == 4 else int(start)
         start_full = 2000 + start if start < 50 else 1900 + start
+
+        # Normalize end
         if end:
             end = int(end[-2:]) if len(end) == 4 else int(end)
         else:
             end = (start + 1) % 100
+
         return f"{start_full}-{end:02d}"
 
+    # Fallback: current season
     year_start = current_year if datetime.now().month >= 8 else current_year - 1
     year_end = str(year_start + 1)[2:]
     return f"{year_start}-{year_end}"
+
 
 def fetch_players(team_id):
     """Get roster for a team ID."""
@@ -60,6 +72,7 @@ def fetch_players(team_id):
     time.sleep(0.6)  # tiny delay to avoid hammering the API
     df = roster.get_data_frames()[0]
     return df[["PLAYER_ID", "PLAYER"]]
+
 
 def fetch_game_stats(player_id, season: str):
     """Get a player's game log (points, assists, rebounds, 3PM, opponent, game date)."""
@@ -78,13 +91,13 @@ def fetch_game_stats(player_id, season: str):
 
     needed = {"GAME_DATE", "MATCHUP", "PTS", "AST", "REB", "FG3M"}
     present = needed.intersection(df.columns)
-    # Require at least PTS to consider this valid; fill missing others with 0
+
+    # Require at least PTS, GAME_DATE, MATCHUP to consider valid
     if "PTS" not in present or "GAME_DATE" not in present or "MATCHUP" not in present:
         return pd.DataFrame(columns=["Game Time (PST)", "Opponent", "Points", "Assists", "Rebounds", "3PM"])
 
-    # Keep only the columns we can map; fill missing metric cols with 0
+    # Keep only columns we have; rename and fill missing metrics with 0
     out = df[list(present)].rename(columns={"GAME_DATE": "Date"})
-    # Add missing stat columns with zeros if not present (defensive coding)
     for col_src, col_dst in [("AST", "Assists"), ("REB", "Rebounds"), ("FG3M", "3PM"), ("PTS", "Points")]:
         if col_src not in out.columns:
             out[col_src] = 0
@@ -96,8 +109,88 @@ def fetch_game_stats(player_id, season: str):
     out = out.rename(columns={"PTS": "Points", "AST": "Assists", "REB": "Rebounds", "FG3M": "3PM"})
     return out[["Game Time (PST)", "Opponent", "Points", "Assists", "Rebounds", "3PM"]].sort_values("Game Time (PST)")
 
+
+def fetch_team_game_totals(team_id, season: str):
+    """
+    Use LeagueGameLog to get:
+      - Team points
+      - Opponent points
+      - Full game total points
+    for every game this team plays in the given season.
+    """
+    try:
+        stats = leaguegamelog.LeagueGameLog(
+            player_or_team_abbreviation="T",   # team-level logs
+            season=season,                     # e.g. '2024-25'
+            season_type_all_star="Regular Season",
+        )
+        time.sleep(0.6)
+        df = stats.get_data_frames()[0]
+    except Exception as e:
+        print(f"  ⚠️  Could not fetch league game log: {e}")
+        return pd.DataFrame(columns=[
+            "Game Time (PST)", "Opponent", "Team Points",
+            "Opponent Points", "Game Total Points"
+        ])
+
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "Game Time (PST)", "Opponent", "Team Points",
+            "Opponent Points", "Game Total Points"
+        ])
+
+    # Make sure TEAM_ID and PTS are numeric
+    try:
+        df["TEAM_ID"] = df["TEAM_ID"].astype(int)
+    except Exception:
+        pass
+
+    df["PTS"] = pd.to_numeric(df["PTS"], errors="coerce").fillna(0)
+
+    # Filter to this team only
+    team_id_int = int(team_id)
+    team_games = df[df["TEAM_ID"] == team_id_int].copy()
+    if team_games.empty:
+        return pd.DataFrame(columns=[
+            "Game Time (PST)", "Opponent", "Team Points",
+            "Opponent Points", "Game Total Points"
+        ])
+
+    # Full game total: sum of both teams' PTS for each GAME_ID
+    pts_by_game = (
+        df.groupby("GAME_ID")["PTS"]
+        .sum()
+        .rename("Game Total Points")
+        .reset_index()
+    )
+
+    # Merge game totals back onto this team's rows
+    team_games = team_games.merge(pts_by_game, on="GAME_ID", how="left")
+
+    # Opponent points = game total - this team’s points
+    team_games["Opponent Points"] = team_games["Game Total Points"] - team_games["PTS"]
+
+    # Clean date / opponent columns
+    team_games["GAME_DATE"] = pd.to_datetime(team_games["GAME_DATE"], errors="coerce")
+    team_games["Game Time (PST)"] = team_games["GAME_DATE"].dt.strftime("%Y-%m-%d")
+
+    team_games["Opponent"] = team_games["MATCHUP"].apply(
+        lambda x: x.split(" ")[-1] if isinstance(x, str) else ""
+    )
+
+    out = team_games[[
+        "Game Time (PST)",
+        "Opponent",
+        "PTS",
+        "Opponent Points",
+        "Game Total Points",
+    ]].rename(columns={"PTS": "Team Points"})
+
+    return out.sort_values("Game Time (PST)")
+
+
 def export_team_from_object(team_obj: dict, season: str):
-    """Export one team's points/assists/rebounds/3PM stats to an Excel file."""
+    """Export one team's stats to an Excel file, including full-game team & game totals."""
     team_id = team_obj["id"]
     team_name = team_obj["full_name"]
     print(f"\n✅ Team: {team_name} | Season: {season}")
@@ -118,6 +211,7 @@ def export_team_from_object(team_obj: dict, season: str):
     avg_rebounds = []
     avg_3pm = []
 
+    # Build per-player game-by-game matrices
     for _, row in players_df.iterrows():
         pid = row["PLAYER_ID"]
         pname = row["PLAYER"]
@@ -150,6 +244,7 @@ def export_team_from_object(team_obj: dict, season: str):
             combined_3pm, t_df, on=["Game Time (PST)", "Opponent"], how="outer"
         )
 
+        # Averages
         avg_points.append({"Player": pname, "Avg Points": games["Points"].mean()})
         avg_assists.append({"Player": pname, "Avg Assists": games["Assists"].mean()})
         avg_rebounds.append({"Player": pname, "Avg Rebounds": games["Rebounds"].mean()})
@@ -172,6 +267,9 @@ def export_team_from_object(team_obj: dict, season: str):
     avg_rebounds_df = pd.DataFrame(avg_rebounds).sort_values("Avg Rebounds", ascending=False)
     avg_3pm_df = pd.DataFrame(avg_3pm).sort_values("Avg 3PM", ascending=False)
 
+    # Team + full game totals from official game logs
+    team_points_df = fetch_team_game_totals(team_id, season)
+
     file_name = f"{team_name.replace(' ', '_')}_{season}_stats.xlsx"
     with pd.ExcelWriter(file_name, engine="openpyxl") as writer:
         combined_points.to_excel(writer, sheet_name="Points", index=False)
@@ -183,10 +281,15 @@ def export_team_from_object(team_obj: dict, season: str):
         avg_rebounds_df.to_excel(writer, sheet_name="Avg Rebounds", index=False)
         avg_3pm_df.to_excel(writer, sheet_name="Avg 3PM", index=False)
 
+        # Sheet with team score, opponent score, and game total
+        if not team_points_df.empty:
+            team_points_df.to_excel(writer, sheet_name="Team Points", index=False)
+
     print(f"  💾 Saved '{file_name}'")
 
+
 def main():
-    print("🏀 NBA Tracker – Points, Assists, Rebounds, 3PM, Opponents & Game Time")
+    print("🏀 NBA Tracker – Points, Assists, Rebounds, 3PM, Team & Game Totals")
     mode = input("Download data for one team or all teams? (one/all): ").strip().lower()
     raw_season = input("Which season? (e.g., 2024-25 or 2025 or 25): ")
     season = parse_season_input(raw_season)
@@ -208,6 +311,7 @@ def main():
         export_team_from_object({"id": team_id, "full_name": team_name}, season)
 
     print("\n🏁 Done! All requested team data processed.")
+
 
 if __name__ == "__main__":
     main()
